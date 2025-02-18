@@ -20,14 +20,15 @@ class Product(db.Model):
     
     name = db.Column(db.String(150), nullable=False)
     description = db.Column(db.Text)
-    price = db.Column(db.Float(precision=2))
-    stock = db.Column(db.Integer, db.CheckConstraint('stock >= 0'))
+    price = db.Column(db.Float(precision=2), nullable=False)
+    stock = db.Column(db.Integer, db.CheckConstraint('stock >= 0'), default=0)
 
 # Marshmallow Schema
 class ProductSchema(ma.Schema):
     class Meta: # Treated as metadata
         fields = ('id', 'name', 'description', 'price', 'stock')
     
+# Home route
 @app.route('/')
 def home():
     return 'Hello!'
@@ -39,33 +40,24 @@ def init_db():
     db.create_all()
     print('Created tables.')
 
-@app.route('/products')
-def get_all_products():
-    # Generate a statement
-    # SELECT * FROM Products;
-    stmt = db.select(Product)
-    # Execute the statement
-    products = db.session.scalars(stmt)
-    return ProductSchema(many=True).dump(products)
-
 # C - Create (one)
 @app.route('/products', methods=['POST'])
 def create_product():
     # Parse the incoming JSON body from Bruno
-    data = ProductSchema().load(request.json)
+    data = ProductSchema(exclude=['id']).load(request.json) # exclude prevents the ID from the allowed fields to be written into. include also works in the opposite way.
     # print(data)
     # Create a new instance
     new_product = Product(
         name = data['name'],
-        description = data['description'],
+        description = data.get('description', ''), # get allows you to include a default entry
         price = data['price'],
-        stock = data['stock']
+        stock = data.get('stock') # get allows you to avoid a key error, and return null if input is not present (allows for default entry at model level)
     )
     # Add to db session
     db.session.add(new_product)
     # Commit to the db
     db.session.commit()
-    return ProductSchema(many=False).dump(new_product)
+    return ProductSchema(many=False).dump(new_product), 201 # Returns code 201 "Created"
 
 # R - Read (one)
 @app.route('/products/<int:product_id>')
@@ -79,6 +71,61 @@ def get_one_product(product_id):
     else:
         return {"error": f"Product with id {product_id} not found."}, 404
 
+# R - Read (all)
+@app.route('/products')
+def get_all_products():
+    # Generate a statement
+    # SELECT * FROM Products;
+    stmt = db.select(Product)
+    # Execute the statement
+    products = db.session.scalars(stmt)
+    return ProductSchema(many=True).dump(products)
+
+# U - Update (one)
+# PUT - provide the whole object
+# PATCH - replace part of the object - inefficient approach
+# Create statement to select the product with the given product_id
+# Execute the statement (scalar)
+# If product exists, update the fields and commit
+@app.route('/products/<int:product_id>', methods=['PUT'])
+def update_one_product(product_id):
+    # Load and parse the incoming body
+    data = ProductSchema(exclude=['id']).load(request.json)
+    # Select the product by product_id
+    stmt = db.select(Product).filter_by(id=product_id)
+    product = db.session.scalar(stmt)
+    if product:
+        # Update product attirbutes with incoming data
+        product.name = data['name'],
+        product.description = data.get('description', ''),
+        product.price = data['price'],
+        product.stock = data.get('stock')
+        # Commit changes
+        db.session.commit()
+        return ProductSchema().dump(product), 200
+    else:
+        return {"error": f"Product with id {product_id} not found."}, 404
+
+# D - Delete (one)
+# DELETE /products/<int:id>
+# Select the product with the given product_id
+# Execute the statement (scalar)
+# Delete the product (if exists), otherwise return error
+# If deletion successful, return status code with no content
+@app.route('/products/<int:product_id>', methods=['DELETE'])
+def delete_one_product(product_id):
+    # Delete Product with given id
+    # SELECT * FROM products where id = product_id;
+    stmt = db.select(Product).filter_by(id=product_id)
+    product = db.session.scalar(stmt)
+    if product:
+        db.session.delete(product)
+        db.session.commit()
+        return {}, 204 # HTTP 204 code is "No Content"
+    else:
+        return {"error": f"Product with id {product_id} not found."}, 404
+
+# Seeding database
 @app.cli.command('seed_db')
 def seed_db():
     products = [
